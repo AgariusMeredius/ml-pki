@@ -27,7 +27,9 @@ class RevocationList:
     """
     Certificate Revocation List (CRL).
 
-    Immutable: modifying the list produces a new, re-signed instance.
+    Immutable: modifying the list produces a new, re-signed instance via
+    add_serial(). Direct mutation of revoked_serials bypasses the internal
+    lookup index; always use add_serial() for correct behaviour.
     """
 
     issuer_key_id: bytes          # 16 bytes — subject_key_id of the issuer
@@ -36,6 +38,12 @@ class RevocationList:
     revoked_serials: List[bytes]  # list of 16-byte serial numbers
     sig_alg: int
     signature: bytes
+
+    def __post_init__(self) -> None:
+        # Build an O(1) lookup set from the serial list. Created once at
+        # construction time; all factory methods (create, add_serial, decode)
+        # go through __init__ so this is always in sync.
+        self._revoked_set: frozenset = frozenset(self.revoked_serials)
 
     # ------------------------------------------------------------------
     # Factory
@@ -132,8 +140,8 @@ class RevocationList:
         return verify(tbs, self.signature, pub, self.sig_alg)
 
     def is_revoked(self, serial: bytes) -> bool:
-        """Return True if *serial* appears in the revoked serials list."""
-        return serial in self.revoked_serials
+        """Return True if *serial* appears in the revoked serials list (O(1))."""
+        return serial in self._revoked_set
 
     # ------------------------------------------------------------------
     # Serialization

@@ -28,7 +28,11 @@ class VerificationCode(Enum):
     AUTH_KEY_ID_MISMATCH = "auth_key_id_mismatch"
     REVOKED = "revoked"
     CHAIN_TOO_SHORT = "chain_too_short"
+    CHAIN_TOO_LONG = "chain_too_long"
     UNTRUSTED_ROOT = "untrusted_root"
+    # CRL-specific error codes
+    CRL_EXPIRED = "crl_expired"
+    CRL_UNTRUSTED = "crl_untrusted"
 
 
 class VerificationError(Exception):
@@ -81,6 +85,7 @@ def verify_chain(
     chain: list[Certificate],
     trusted_root: Certificate,
     crl: Optional[RevocationList] = None,
+    max_depth: int = 10,
 ) -> None:
     """
     Verify a certificate chain against *trusted_root*.
@@ -90,8 +95,11 @@ def verify_chain(
     provided separately via *trusted_root*.
 
     Checks performed (in order):
-    1. Trusted root self-signature
-    2. For each certificate in the chain (from root down to EE):
+    1. Chain depth does not exceed *max_depth*
+    2. Trusted root self-signature and temporal validity
+    3. If *crl* provided: CRL issuer located in chain, signature verified,
+       and freshness (next_update) enforced
+    4. For each certificate in the chain (from root down to EE):
        a. Temporal validity
        b. Issuer is a CA (is_ca flag)
        c. Issuer has KEY_CERT_SIGN key usage
@@ -108,12 +116,50 @@ def verify_chain(
             VerificationCode.CHAIN_TOO_SHORT,
         )
 
+    if len(chain) > max_depth:
+        raise VerificationError(
+            f"Certificate chain depth ({len(chain)}) exceeds maximum allowed ({max_depth})",
+            VerificationCode.CHAIN_TOO_LONG,
+        )
+
     # Verify the trusted root is self-signed and temporally valid
     verify_self_signed(trusted_root)
     _check_validity(trusted_root)
 
     # Full chain: [trusted_root] + chain (root first, EE last)
     full = [trusted_root] + list(chain)
+
+    # --- CRL pre-validation ---
+    # Before processing the chain, authenticate the CRL itself:
+    #   1. Locate its signer in the chain using issuer_key_id
+    #   2. Verify the CRL's ML-DSA signature against the signer's public key
+    #   3. Enforce CRL freshness (next_update must be in the future)
+    if crl is not None:
+        now = int(time.time())
+
+        crl_issuer: Optional[Certificate] = None
+        for c in full:
+            if c.tbs.subject_key_id == crl.issuer_key_id:
+                crl_issuer = c
+                break
+
+        if crl_issuer is None:
+            raise VerificationError(
+                "CRL issuer certificate not found in the certificate chain",
+                VerificationCode.CRL_UNTRUSTED,
+            )
+
+        if not crl.verify(crl_issuer):
+            raise VerificationError(
+                "CRL signature is invalid",
+                VerificationCode.INVALID_SIGNATURE,
+            )
+
+        if crl.next_update < now:
+            raise VerificationError(
+                "CRL has expired (next_update is in the past); refresh before use",
+                VerificationCode.CRL_EXPIRED,
+            )
 
     for depth, cert in enumerate(chain):
         issuer = full[depth]  # issuer of chain[depth] is full[depth]

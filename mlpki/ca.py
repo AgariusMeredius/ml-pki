@@ -23,6 +23,10 @@ from .constants import (
 from .csr import CertificateSigningRequest
 from .keys import generate_keypair, sign
 
+# Maximum allowed validity in days (~30 years) to prevent unreasonably
+# long-lived certificates that would be hard to revoke.
+_MAX_VALIDITY_DAYS: int = 10_950
+
 
 def _subject_key_id(public_key_bytes: bytes) -> bytes:
     """Compute subject key identifier: SHA3-256(public_key_bytes)[:16]."""
@@ -113,11 +117,19 @@ def issue_from_csr(
     validity_days: int = 365,
 ) -> Certificate:
     """
-    Issue a certificate from a verified CSR.
+    Issue a certificate from a CSR.
 
-    Transfers is_ca, path_len, and key_usage from the CSR.
-    The CSR's self-signature must have been verified before calling this.
+    Automatically verifies the CSR self-signature before issuance.
+    Transfers is_ca, path_len, and key_usage from the CSR (subject to
+    issuer constraints enforced by issue_certificate).
+
+    Raises:
+        ValueError: if the CSR self-signature is invalid, or if the issuer
+                    is not a valid CA, or if path_len constraints are violated.
     """
+    if not csr.verify_self_signature():
+        raise ValueError("CSR self-signature is invalid")
+
     return issue_certificate(
         subject=csr.subject,
         subject_pub=csr.public_key.key_bytes,
@@ -145,8 +157,42 @@ def issue_certificate(
 
     subject_key_id  = SHA3-256(subject_pub)[:16]
     auth_key_id     = issuer_cert.tbs.subject_key_id
+
+    Raises:
+        ValueError: if the issuer is not a CA, lacks KEY_CERT_SIGN, or the
+                    requested path_len violates the issuer's constraint.
     """
     issuer_tbs = issuer_cert.tbs
+
+    # --- Issuer validation ---
+    # The issuer must be a CA with KEY_CERT_SIGN; passing an end-entity
+    # certificate or a CA without signing authority is rejected immediately
+    # rather than producing a certificate that would fail chain validation.
+    if not issuer_tbs.is_ca:
+        raise ValueError(
+            "Issuer certificate is not a CA (is_ca must be True)"
+        )
+    if not (issuer_tbs.key_usage & KEY_USAGE_KEY_CERT_SIGN):
+        raise ValueError(
+            "Issuer certificate lacks KEY_CERT_SIGN key usage"
+        )
+
+    # --- Path-length constraint enforcement ---
+    # Enforce at issuance time so that issued CA certificates cannot claim
+    # a path_len that exceeds what the issuer permits (defence-in-depth;
+    # verify_chain enforces this again at verification time).
+    if is_ca and issuer_tbs.path_len is not None:
+        if issuer_tbs.path_len == 0:
+            raise ValueError(
+                "Issuer path_len=0 forbids issuing CA certificates"
+            )
+        max_sub_path_len = issuer_tbs.path_len - 1
+        if path_len is None or path_len > max_sub_path_len:
+            raise ValueError(
+                f"Requested path_len ({path_len!r}) exceeds the maximum allowed "
+                f"by the issuer's constraint (max: {max_sub_path_len})"
+            )
+
     skid = _subject_key_id(subject_pub)
     not_before, not_after = _validity_window(validity_days)
     serial = _random_serial()

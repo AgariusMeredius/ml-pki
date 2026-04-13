@@ -29,13 +29,21 @@ from .constants import (
     KEYFILE_TAG,
 )
 
-# Argon2id defaults
+# Argon2id defaults used when saving a new key file.
 _ARGON2_TIME_COST: int = 3
 _ARGON2_MEMORY_COST: int = 65536  # 64 MiB
 _ARGON2_PARALLELISM: int = 4
 _SALT_LEN: int = 16
 _NONCE_LEN: int = 12
 _KEY_LEN: int = 32
+
+# Minimum Argon2id parameters accepted when *loading* a key file.
+# These guards prevent a tampered key file from downgrading the KDF work
+# factor to make offline brute-force attacks trivially cheap.
+# Values are conservative minimums; production files should exceed them.
+_MIN_ARGON2_TIME_COST: int = 1
+_MIN_ARGON2_MEMORY_COST: int = 8192   # 8 MiB absolute floor
+_MIN_ARGON2_PARALLELISM: int = 1
 
 
 def _oqs_sig(alg: int):
@@ -160,6 +168,27 @@ def load_secret_key(path: str, password: bytes) -> tuple[bytes, int]:
     time_cost = params[ARGON2_TIME_COST]
     memory_cost = params[ARGON2_MEMORY_COST]
     parallelism = params[ARGON2_PARALLELISM]
+
+    # Reject key files whose Argon2id parameters fall below minimums.
+    # A tampered file could use e.g. memory_cost=1 to make brute-force
+    # of the password trivially fast.
+    if alg not in ALG_NAMES:
+        raise ValueError(f"Unknown algorithm ID in key file: {alg!r}")
+    if time_cost < _MIN_ARGON2_TIME_COST:
+        raise ValueError(
+            f"Key file time_cost={time_cost} is below the minimum "
+            f"({_MIN_ARGON2_TIME_COST}); file may be tampered"
+        )
+    if memory_cost < _MIN_ARGON2_MEMORY_COST:
+        raise ValueError(
+            f"Key file memory_cost={memory_cost} KiB is below the minimum "
+            f"({_MIN_ARGON2_MEMORY_COST} KiB); file may be tampered"
+        )
+    if parallelism < _MIN_ARGON2_PARALLELISM:
+        raise ValueError(
+            f"Key file parallelism={parallelism} is below the minimum "
+            f"({_MIN_ARGON2_PARALLELISM}); file may be tampered"
+        )
 
     derived = hash_secret_raw(
         secret=password,

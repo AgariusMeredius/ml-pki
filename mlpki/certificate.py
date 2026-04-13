@@ -9,8 +9,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
+
+# Maximum lengths for Name string fields.  These prevent DoS via pathologically
+# large CBOR inputs while accommodating any realistic distinguished name.
+_MAX_NAME_FIELD_LEN: int = 256
+
+# Expected byte lengths for fixed-size fields.
+_SERIAL_LEN: int = 16
+_KEY_ID_LEN: int = 16
 
 import cbor2
 
@@ -58,11 +66,16 @@ class Name:
 
     @classmethod
     def from_map(cls, m: dict) -> "Name":
-        return cls(
-            cn=m[NAME_CN],
-            org=m[NAME_ORG],
-            ou=m.get(NAME_OU),
-        )
+        cn = m[NAME_CN]
+        org = m[NAME_ORG]
+        ou = m.get(NAME_OU)
+        if len(cn) > _MAX_NAME_FIELD_LEN:
+            raise ValueError(f"Name.cn exceeds maximum length ({_MAX_NAME_FIELD_LEN})")
+        if len(org) > _MAX_NAME_FIELD_LEN:
+            raise ValueError(f"Name.org exceeds maximum length ({_MAX_NAME_FIELD_LEN})")
+        if ou is not None and len(ou) > _MAX_NAME_FIELD_LEN:
+            raise ValueError(f"Name.ou exceeds maximum length ({_MAX_NAME_FIELD_LEN})")
+        return cls(cn=cn, org=org, ou=ou)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Name):
@@ -128,9 +141,26 @@ class TBSCertificate:
     def decode(cls, data: bytes) -> "TBSCertificate":
         """Decode TBS from CBOR bytes."""
         m = cbor2.loads(data)
+        serial = bytes(m[TBS_SERIAL])
+        subject_key_id = bytes(m[TBS_SUBJECT_KEY_ID])
+        auth_key_id = bytes(m[TBS_AUTH_KEY_ID])
+
+        if len(serial) != _SERIAL_LEN:
+            raise ValueError(
+                f"TBS serial must be exactly {_SERIAL_LEN} bytes, got {len(serial)}"
+            )
+        if len(subject_key_id) != _KEY_ID_LEN:
+            raise ValueError(
+                f"subject_key_id must be exactly {_KEY_ID_LEN} bytes, got {len(subject_key_id)}"
+            )
+        if len(auth_key_id) != _KEY_ID_LEN:
+            raise ValueError(
+                f"auth_key_id must be exactly {_KEY_ID_LEN} bytes, got {len(auth_key_id)}"
+            )
+
         return cls(
             version=m[TBS_VERSION],
-            serial=bytes(m[TBS_SERIAL]),
+            serial=serial,
             issuer=Name.from_map(m[TBS_ISSUER]),
             subject=Name.from_map(m[TBS_SUBJECT]),
             not_before=m[TBS_NOT_BEFORE],
@@ -139,8 +169,8 @@ class TBSCertificate:
             is_ca=m[TBS_IS_CA],
             path_len=m[TBS_PATH_LEN],
             key_usage=m[TBS_KEY_USAGE],
-            subject_key_id=bytes(m[TBS_SUBJECT_KEY_ID]),
-            auth_key_id=bytes(m[TBS_AUTH_KEY_ID]),
+            subject_key_id=subject_key_id,
+            auth_key_id=auth_key_id,
         )
 
 
@@ -152,14 +182,18 @@ class Certificate:
     sig_alg: int
     signature: bytes
 
-    # Decoded TBS (cached lazily)
-    _tbs: Optional[TBSCertificate] = None
+    # Decoded TBS cached lazily.  Excluded from __eq__, __hash__, and __repr__
+    # so that two Certificate objects with identical cryptographic content compare
+    # as equal regardless of whether the cache has been populated.
+    _tbs: Optional[TBSCertificate] = field(
+        default=None, compare=False, repr=False, hash=False
+    )
 
     @property
     def tbs(self) -> TBSCertificate:
         if self._tbs is None:
-            object.__setattr__(self, "_tbs", TBSCertificate.decode(self.tbs_bytes))
-        return self._tbs  # type: ignore[return-value]
+            self._tbs = TBSCertificate.decode(self.tbs_bytes)
+        return self._tbs
 
     def encode(self) -> bytes:
         """Encode outer certificate to CBOR bytes."""
