@@ -154,7 +154,7 @@ mlpki/
 ├── revocation.py     RevocationList (CRL)
 └── verify.py         verify_chain, verify_signature, VerificationError
 
-tests/                pytest suite — 129 tests, no network required
+tests/                pytest suite — 144 tests, no network required
 examples/             Runnable end-to-end scripts
 docs/                 Architecture, API reference, format spec, security
 ```
@@ -175,6 +175,93 @@ Detailed documentation lives in [`docs/`](docs/):
 | [`api-reference.md`](docs/api-reference.md) | Full API reference for every public function |
 | [`formats.md`](docs/formats.md) | CBOR serialization format specification |
 | [`security.md`](docs/security.md) | Security considerations and threat model |
+
+## Usage Warnings and Security Notes
+
+### Algorithm Selection
+
+| Variant | NIST Level | Recommended for |
+|---|---|---|
+| `ALG_ML_DSA_44` | 2 (128-bit classical) | **Development and testing only** |
+| `ALG_ML_DSA_65` | 3 (192-bit classical) | General-purpose production use |
+| `ALG_ML_DSA_87` | 5 (256-bit classical) | High-security or long-lived certificates (> 10 years) |
+
+**Do not use `ALG_ML_DSA_44` in production.** Its 128-bit classical security level is the lowest NIST accepts and is offered solely for speed in tests and constrained devices.
+
+### Key Management
+
+- Use `save_secret_key()` with a **strong randomly generated password** (≥ 32 bytes from `secrets.token_bytes()`). Human-memorable passphrases are not adequate for root CA keys.
+- Restrict key file permissions: `chmod 600 root_ca.mlkey`
+- Store root CA key files on **offline or hardware-secured media** when not actively signing.
+- Secret key bytes are plain Python `bytes` objects — Python does not zero memory on garbage collection. Keep secret keys in local scope; do not cache them in global state.
+
+### CRL Freshness
+
+`verify_chain()` now **enforces** that the provided CRL's `next_update` timestamp is in the future. A stale CRL will raise `VerificationError` with code `CRL_EXPIRED`. Applications must refresh CRLs before they expire:
+
+```python
+# Refresh before next_update; never let CRLs go stale.
+crl = RevocationList.create(issuer_cert, issuer_sec, next_update_days=7)
+```
+
+### Chain Depth
+
+`verify_chain()` rejects chains longer than `max_depth` (default: 10). Set a tighter limit for flat PKI hierarchies to reduce attack surface:
+
+```python
+verify_chain([ee_cert], trusted_root=root_cert, max_depth=2)
+```
+
+### CSR Handling
+
+`issue_from_csr()` automatically verifies the CSR self-signature. Still, the CA must independently apply its own **issuance policy** — for example, whether to honour a CSR's `is_ca=True` request. The library transfers requested extensions from the CSR subject to issuer constraints; it does not enforce naming policies or organisational vetting.
+
+### What `mlpki` Does NOT Provide
+
+- **No key exchange or confidentiality** — ML-DSA is a signature scheme only; no KEM, no TLS, no encrypted channels
+- **No OCSP** — revocation is batch CRL only; no real-time revocation status
+- **No X.509 / TLS compatibility** — certificates use a custom CBOR format and are not interoperable with existing X.509 infrastructure
+- **No name constraints** — CAs cannot restrict the subject namespace of subordinate CAs
+- **No clock skew tolerance** — validity window checks use exact integer comparisons; NTP drift of even 1 second can cause `NOT_YET_VALID` on freshly issued certificates
+
+### Security Audit
+
+A full security and functionality audit was performed on 2026-04-13.  
+See [`AUDIT.md`](AUDIT.md) for all findings, applied fixes, and residual accepted risks.
+
+---
+
+## Disclaimer
+
+`mlpki` is an **experimental research library** implementing post-quantum PKI
+primitives based on ML-DSA (FIPS 204). It is provided for educational purposes,
+prototyping, and evaluation of post-quantum certificate infrastructures.
+
+**This software is not a certified cryptographic product and has not undergone
+a formal third-party security evaluation.**
+
+The following limitations apply:
+
+- **No warranty of any kind** is provided, express or implied, including fitness
+  for a particular purpose or security in production environments.
+- The CBOR-based certificate format is **not interoperable** with X.509,
+  TLS, or any standard PKI infrastructure. It is a custom format defined by
+  this library alone.
+- Post-quantum cryptography standards are **recently standardised** (FIPS 204:
+  August 2024). While ML-DSA is considered secure against known quantum and
+  classical attacks, the broader ecosystem of implementations, tooling, and
+  operational guidance is still maturing.
+- Correct security outcomes depend on callers following the guidance in
+  [`docs/security.md`](docs/security.md) and [`AUDIT.md`](AUDIT.md). Misuse
+  of the API — such as skipping chain verification, using stale CRLs, or
+  handling secret keys insecurely — cannot be prevented by the library alone.
+- The underlying `liboqs` C library must be kept updated independently.
+  Security fixes in `liboqs` are not automatically applied by updating this
+  package.
+
+**Before deploying `mlpki` or any derivative work in a production or
+security-sensitive environment, obtain an independent security review by
+qualified cryptographers.**
 
 ## License
 
