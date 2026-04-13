@@ -1,5 +1,11 @@
 # mlpki
 
+> **Disclaimer:** This project was developed, tested, and audited with
+> Claude Sonnet 4.6 and Claude Code (Sonnet 4.6).
+> It is an AI-assisted research project and has not undergone
+> independent human peer review. See the [Disclaimer](#disclaimer) section
+> for full limitations before any production use.
+
 Post-Quantum Public Key Infrastructure library for Python.
 
 `mlpki` implements certificate management and digital signatures using
@@ -236,6 +242,12 @@ See [`AUDIT.md`](AUDIT.md) for all findings, applied fixes, and residual accepte
 `mlpki` is an **experimental research library** implementing post-quantum PKI
 primitives based on ML-DSA (FIPS 204). It is provided for educational purposes,
 prototyping, and evaluation of post-quantum certificate infrastructures.
+
+**This project was developed, tested, and audited with Claude Sonnet 4.6
+and Claude Code (Sonnet 4.6).** The entire codebase — including design,
+implementation, test suite, and security audit — was produced through
+AI-assisted development. It has not undergone independent human peer review
+by qualified cryptographers.
 
 **This software is not a certified cryptographic product and has not undergone
 a formal third-party security evaluation.**
