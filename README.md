@@ -275,6 +275,14 @@ The following limitations apply:
 security-sensitive environment, obtain an independent security review by
 qualified cryptographers.**
 
+## Export Control
+
+This project is published as open-source software and is not subject to
+U.S. export control regulations under the public domain exemption
+(EAR § 740.17(b)(1)). The cryptographic algorithms used (ML-DSA / FIPS 204,
+AES-256-GCM) are publicly standardised by NIST and their implementations
+are freely available worldwide.
+
 ## License
 
 MIT
