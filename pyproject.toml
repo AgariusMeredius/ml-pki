@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "mlpki"
+version = "0.1.0"
+description = "Post-Quantum PKI library based on ML-DSA and CBOR serialization"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "cbor2>=5.6",
+    "liboqs-python>=0.14.0",
+    "argon2-cffi>=23.1",
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mlpki*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
